@@ -18,7 +18,8 @@ const transporter = nodemailer.createTransport({
 
 exports.register = async (req, res) => {
     try {
-        const { name, email, password } = req.body;
+        const { firstName, lastName, role, avatar, email, password } = req.body;
+        const name = `${firstName} ${lastName}`.trim() || req.body.name; // Fallback to name if generic
 
         // Check if user already exists
         const existingUser = await User.findOne({ email });
@@ -29,11 +30,19 @@ exports.register = async (req, res) => {
         const salt = await bcrypt.genSalt(10);
         const hashedPassword = await bcrypt.hash(password, salt);
 
-        const newUser = new User({ name, email, password: hashedPassword });
+        const newUser = new User({ 
+            name: name || email.split('@')[0], 
+            firstName, 
+            lastName, 
+            role, 
+            avatar, 
+            email, 
+            password: hashedPassword 
+        });
         await newUser.save();
 
         const token = jwt.sign({ _id: newUser._id }, process.env.JWT_SECRET);
-        res.status(201).json({ token, user: { id: newUser._id, name: newUser.name, email: newUser.email, role: 'student' } });
+        res.status(201).json({ token, user: { id: newUser._id, name: newUser.name, firstName: newUser.firstName, lastName: newUser.lastName, avatar: newUser.avatar, email: newUser.email, role: newUser.role } });
     } catch (err) {
         if (err.code === 11000) {
             return res.status(400).json({ message: "Email already exists" });
@@ -51,8 +60,71 @@ exports.login = async (req, res) => {
         const isMatch = await bcrypt.compare(password, user.password);
         if (!isMatch) return res.status(400).json({ message: "Invalid credentials" });
 
+        if (user.settings && user.settings.mfaEnabled) {
+            // Generate 6-digit OTP
+            const otp = Math.floor(100000 + Math.random() * 900000).toString();
+            const salt = await bcrypt.genSalt(10);
+            const hashedOtp = await bcrypt.hash(otp, salt);
+            
+            user.mfaOtp = hashedOtp;
+            user.mfaOtpExpiry = new Date(Date.now() + 10 * 60 * 1000); // 10 mins expiry
+            await user.save();
+            
+            // Send OTP email
+            await transporter.sendMail({
+                from: `"ClassFlow" <${process.env.EMAIL_USER}>`,
+                to: email,
+                subject: 'ClassFlow - Login Security Code (MFA)',
+                html: `
+                    <div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto; padding: 32px; background: #f8fafc; border-radius: 16px;">
+                        <h2 style="color: #1e293b; margin-bottom: 8px;">Multi-Factor Authentication</h2>
+                        <p style="color: #64748b; margin-bottom: 24px;">Someone is trying to log into your account. Use this OTP to proceed:</p>
+                        <div style="background: #3b82f6; color: white; font-size: 32px; font-weight: 700; letter-spacing: 8px; text-align: center; padding: 16px; border-radius: 12px; margin-bottom: 24px;">
+                            ${otp}
+                        </div>
+                        <p style="color: #94a3b8; font-size: 13px;">This code expires in <strong>10 minutes</strong>. If this wasn't you, securely change your password immediately.</p>
+                    </div>
+                `
+            });
+
+            return res.json({ requiresMfa: true, email: user.email, message: "MFA code sent to your email" });
+        }
+
         const token = jwt.sign({ _id: user._id }, process.env.JWT_SECRET);
-        res.json({ token, user: { id: user._id, name: user.name, email: user.email, role: 'student' } });
+        res.json({ token, user: { id: user._id, name: user.name, firstName: user.firstName, lastName: user.lastName, avatar: user.avatar, email: user.email, role: user.role } });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+};
+
+exports.verifyMfa = async (req, res) => {
+    try {
+        const { email, otp } = req.body;
+        if (!email || !otp) return res.status(400).json({ message: "Email and OTP required" });
+
+        const user = await User.findOne({ email });
+        if (!user) return res.status(404).json({ message: "User not found" });
+
+        if (!user.mfaOtp || !user.mfaOtpExpiry) {
+            return res.status(400).json({ message: "No MFA requested" });
+        }
+
+        if (new Date() > user.mfaOtpExpiry) {
+            return res.status(400).json({ message: "OTP has expired. Please log in again." });
+        }
+
+        const isOtpValid = await bcrypt.compare(otp, user.mfaOtp);
+        if (!isOtpValid) {
+            return res.status(400).json({ message: "Invalid OTP" });
+        }
+
+        // Clear OTP
+        user.mfaOtp = undefined;
+        user.mfaOtpExpiry = undefined;
+        await user.save();
+
+        const token = jwt.sign({ _id: user._id }, process.env.JWT_SECRET);
+        res.json({ token, user: { id: user._id, name: user.name, firstName: user.firstName, lastName: user.lastName, avatar: user.avatar, email: user.email, role: user.role } });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
