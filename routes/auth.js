@@ -4,13 +4,11 @@ const auth = require('../middleware/authMiddleware');
 
 router.post('/register', authController.register);
 router.post('/login', authController.login);
-router.post('/verify-login-otp', authController.verifyMfa);
 router.post('/google', authController.googleLogin);
 router.post('/forgot-password', authController.forgotPassword);
 router.post('/reset-password', authController.resetPassword);
 router.get('/me', auth, authController.getMe);
 router.put('/me', auth, authController.updateMe);
 
-router.post('/resend-mfa-otp', authController.resendMfaOtp);
 module.exports = router;
 

@@ -68,46 +68,6 @@ exports.login = async (req, res) => {
         const isMatch = await bcrypt.compare(password, user.password);
         if (!isMatch) return res.status(400).json({ message: "Invalid credentials" });
 
-        const isMfaEnabled = user.settings?.mfaEnabled ?? false;
-        
-        if (isMfaEnabled) {
-            // Generate 6-digit OTP
-            const otp = Math.floor(100000 + Math.random() * 900000).toString();
-            const salt = await bcrypt.genSalt(10);
-            const hashedOtp = await bcrypt.hash(otp, salt);
-            
-            user.mfaOtp = hashedOtp;
-            user.mfaOtpExpiry = new Date(Date.now() + 10 * 60 * 1000); // 10 mins expiry
-            await user.save();
-            
-            // Send OTP email
-            try {
-                await transporter.sendMail({
-                    from: `"ClassFlow" <${process.env.EMAIL_USER}>`,
-                    to: email,
-                    subject: 'ClassFlow - Login Security Code (MFA)',
-                    html: `
-                        <div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto; padding: 32px; background: #f8fafc; border-radius: 16px;">
-                            <h2 style="color: #1e293b; margin-bottom: 8px;">Multi-Factor Authentication</h2>
-                            <p style="color: #64748b; margin-bottom: 24px;">Someone is trying to log into your account. Use this OTP to proceed:</p>
-                            <div style="background: #3b82f6; color: white; font-size: 32px; font-weight: 700; letter-spacing: 8px; text-align: center; padding: 16px; border-radius: 12px; margin-bottom: 24px;">
-                                ${otp}
-                            </div>
-                            <p style="color: #94a3b8; font-size: 13px;">This code expires in <strong>10 minutes</strong>. If this wasn't you, securely change your password immediately.</p>
-                        </div>
-                    `
-                });
-
-                return res.json({ requiresMfa: true, email: user.email, message: "MFA code sent to your email" });
-            } catch (err) {
-                console.error("Failed to send MFA email:", err);
-                user.mfaOtp = undefined;
-                user.mfaOtpExpiry = undefined;
-                await user.save();
-                return res.status(500).json({ message: "Failed to send MFA verification code: " + err.message });
-            }
-        }
-
         const token = jwt.sign({ _id: user._id }, process.env.JWT_SECRET);
         res.json({ token, user: { id: user._id, name: user.name, firstName: user.firstName, lastName: user.lastName, avatar: user.avatar, email: user.email, role: user.role } });
     } catch (err) {
@@ -115,38 +75,7 @@ exports.login = async (req, res) => {
     }
 };
 
-exports.verifyMfa = async (req, res) => {
-    try {
-        const { email, otp } = req.body;
-        if (!email || !otp) return res.status(400).json({ message: "Email and OTP required" });
 
-        const user = await User.findOne({ email });
-        if (!user) return res.status(404).json({ message: "User not found" });
-
-        if (!user.mfaOtp || !user.mfaOtpExpiry) {
-            return res.status(400).json({ message: "No MFA requested" });
-        }
-
-        if (new Date() > user.mfaOtpExpiry) {
-            return res.status(400).json({ message: "OTP has expired. Please log in again." });
-        }
-
-        const isOtpValid = await bcrypt.compare(otp, user.mfaOtp);
-        if (!isOtpValid) {
-            return res.status(400).json({ message: "Invalid OTP" });
-        }
-
-        // Clear OTP
-        user.mfaOtp = undefined;
-        user.mfaOtpExpiry = undefined;
-        await user.save();
-
-        const token = jwt.sign({ _id: user._id }, process.env.JWT_SECRET);
-        res.json({ token, user: { id: user._id, name: user.name, firstName: user.firstName, lastName: user.lastName, avatar: user.avatar, email: user.email, role: user.role } });
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
-};
 
 exports.getMe = async (req, res) => {
     try {
@@ -159,20 +88,15 @@ exports.getMe = async (req, res) => {
 
 exports.updateMe = async (req, res) => {
     try {
-        const { settings, ...otherFields } = req.body;
         const user = await User.findById(req.user._id);
         
         if (!user) {
             return res.status(404).json({ message: "User not found" });
         }
 
-        // Handle settings update manually to support partial nested updates
-        if (settings) {
-            if (!user.settings) user.settings = {};
-            if (settings.mfaEnabled !== undefined) {
-                user.settings.mfaEnabled = settings.mfaEnabled;
-            }
-        }
+        // Apply other fields
+        const { settings, ...otherFields } = req.body;
+        Object.assign(user, otherFields);
         
         await user.save();
         
@@ -308,54 +232,5 @@ exports.resetPassword = async (req, res) => {
     }
 };
 
-exports.resendMfaOtp = async (req, res) => {
-    try {
-        const { email } = req.body;
-        if (!email) return res.status(400).json({ message: "Email required" });
-
-        const user = await User.findOne({ email });
-        if (!user) return res.status(404).json({ message: "User not found" });
-
-        // Generate new 6-digit OTP
-        const otp = Math.floor(100000 + Math.random() * 900000).toString();
-        const salt = await bcrypt.genSalt(10);
-        const hashedOtp = await bcrypt.hash(otp, salt);
-        
-        user.mfaOtp = hashedOtp;
-        user.mfaOtpExpiry = new Date(Date.now() + 10 * 60 * 1000); 
-        await user.save();
-        
-        // Send OTP email
-        try {
-            await transporter.sendMail({
-                from: `"ClassFlow" <${process.env.EMAIL_USER}>`,
-                to: email,
-                subject: 'ClassFlow - New Login Code (MFA)',
-                html: `
-                    <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 480px; margin: 0 auto; padding: 40px; background: #ffffff; border-radius: 20px; box-shadow: 0 10px 25px rgba(0,0,0,0.05); border: 1px solid #e2e8f0;">
-                        <div style="text-align: center; margin-bottom: 30px;">
-                            <h2 style="color: #0f172a; margin: 0; font-size: 24px;">Security Verification</h2>
-                            <p style="color: #64748b; margin-top: 8px;">Your requested login code</p>
-                        </div>
-                        <div style="background: #f1f5f9; color: #1e293b; font-size: 42px; font-weight: 800; letter-spacing: 12px; text-align: center; padding: 24px; border-radius: 16px; margin: 30px 0; border: 1px solid #cbd5e1;">
-                            ${otp}
-                        </div>
-                        <p style="color: #475569; font-size: 14px; text-align: center; line-height: 1.6;">
-                            This code expires in <strong>10 minutes</strong>.<br>
-                            If you didn't request this, please ignore this email.
-                        </p>
-                    </div>
-                `
-            });
-
-            res.json({ message: "New MFA code sent to your email" });
-        } catch (err) {
-            console.error("Failed to resend MFA email:", err);
-            return res.status(500).json({ message: "Failed to send code: " + err.message });
-        }
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
-};
 
 
