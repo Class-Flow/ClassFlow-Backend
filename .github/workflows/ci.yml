@@ -16,6 +16,11 @@ jobs:
         image: mongo:7
         ports:
           - 27017:27017
+        options: >-
+          --health-cmd "mongosh --eval 'db.runCommand({hello: 1})'"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
 
     steps:
       - name: Checkout code
@@ -37,6 +42,9 @@ jobs:
           MONGODB_URI: mongodb://localhost:27017/eduplanai-test
           JWT_SECRET: test-jwt-secret-ci
           GEMINI_API_KEY: test-key
+          GOOGLE_CLIENT_ID: test-google-id
+          EMAIL_USER: test@example.com
+          EMAIL_PASS: test-pass
 
       - name: Security audit
         run: npm audit --audit-level=high

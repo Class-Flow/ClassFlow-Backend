@@ -9,6 +9,7 @@ const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
 // Email transporter
 const transporter = nodemailer.createTransport({
+    service: 'gmail',
     host: 'smtp.gmail.com',
     port: 465,
     secure: true,
@@ -16,6 +17,8 @@ const transporter = nodemailer.createTransport({
         user: process.env.EMAIL_USER,
         pass: process.env.EMAIL_PASS,
     },
+    // Add family: 4 to force IPv4 connection because of ENETUNREACH IPv6 issue
+    family: 4, 
     connectionTimeout: 15000,
     greetingTimeout: 15000,
     socketTimeout: 15000
@@ -65,7 +68,7 @@ exports.login = async (req, res) => {
         const isMatch = await bcrypt.compare(password, user.password);
         if (!isMatch) return res.status(400).json({ message: "Invalid credentials" });
 
-        const isMfaEnabled = user.settings?.mfaEnabled ?? true;
+        const isMfaEnabled = user.settings?.mfaEnabled ?? false;
         
         if (isMfaEnabled) {
             // Generate 6-digit OTP
@@ -304,4 +307,55 @@ exports.resetPassword = async (req, res) => {
         res.status(500).json({ message: "Failed to reset password", error: err.message });
     }
 };
+
+exports.resendMfaOtp = async (req, res) => {
+    try {
+        const { email } = req.body;
+        if (!email) return res.status(400).json({ message: "Email required" });
+
+        const user = await User.findOne({ email });
+        if (!user) return res.status(404).json({ message: "User not found" });
+
+        // Generate new 6-digit OTP
+        const otp = Math.floor(100000 + Math.random() * 900000).toString();
+        const salt = await bcrypt.genSalt(10);
+        const hashedOtp = await bcrypt.hash(otp, salt);
+        
+        user.mfaOtp = hashedOtp;
+        user.mfaOtpExpiry = new Date(Date.now() + 10 * 60 * 1000); 
+        await user.save();
+        
+        // Send OTP email
+        try {
+            await transporter.sendMail({
+                from: `"ClassFlow" <${process.env.EMAIL_USER}>`,
+                to: email,
+                subject: 'ClassFlow - New Login Code (MFA)',
+                html: `
+                    <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 480px; margin: 0 auto; padding: 40px; background: #ffffff; border-radius: 20px; box-shadow: 0 10px 25px rgba(0,0,0,0.05); border: 1px solid #e2e8f0;">
+                        <div style="text-align: center; margin-bottom: 30px;">
+                            <h2 style="color: #0f172a; margin: 0; font-size: 24px;">Security Verification</h2>
+                            <p style="color: #64748b; margin-top: 8px;">Your requested login code</p>
+                        </div>
+                        <div style="background: #f1f5f9; color: #1e293b; font-size: 42px; font-weight: 800; letter-spacing: 12px; text-align: center; padding: 24px; border-radius: 16px; margin: 30px 0; border: 1px solid #cbd5e1;">
+                            ${otp}
+                        </div>
+                        <p style="color: #475569; font-size: 14px; text-align: center; line-height: 1.6;">
+                            This code expires in <strong>10 minutes</strong>.<br>
+                            If you didn't request this, please ignore this email.
+                        </p>
+                    </div>
+                `
+            });
+
+            res.json({ message: "New MFA code sent to your email" });
+        } catch (err) {
+            console.error("Failed to resend MFA email:", err);
+            return res.status(500).json({ message: "Failed to send code: " + err.message });
+        }
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+};
+
 

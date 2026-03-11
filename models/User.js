@@ -12,7 +12,7 @@ const UserSchema = new mongoose.Schema({
         sleepTimeStart: { type: String, default: "23:00" },
         sleepTimeEnd: { type: String, default: "07:00" },
         preferredStudyDuration: { type: Number, default: 60 }, // in minutes
-        mfaEnabled: { type: Boolean, default: true }
+        mfaEnabled: { type: Boolean, default: false }
     },
     resetOtp: { type: String },
     resetOtpExpiry: { type: Date },
