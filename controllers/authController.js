@@ -14,9 +14,9 @@ const transporter = nodemailer.createTransport({
         user: process.env.EMAIL_USER,
         pass: process.env.EMAIL_PASS,
     },
-    connectionTimeout: 5000,
-    greetingTimeout: 5000,
-    socketTimeout: 5000
+    connectionTimeout: 15000,
+    greetingTimeout: 15000,
+    socketTimeout: 15000
 });
 
 exports.register = async (req, res) => {
@@ -95,11 +95,11 @@ exports.login = async (req, res) => {
 
                 return res.json({ requiresMfa: true, email: user.email, message: "MFA code sent to your email" });
             } catch (err) {
-                console.error("Failed to send MFA email, bypassing MFA for seamless login:", err);
+                console.error("Failed to send MFA email:", err);
                 user.mfaOtp = undefined;
                 user.mfaOtpExpiry = undefined;
                 await user.save();
-                // If it fails (e.g., timeout), just log them in directly
+                return res.status(500).json({ message: "Failed to send MFA verification code. Please try again." });
             }
         }
 
@@ -146,6 +146,31 @@ exports.verifyMfa = async (req, res) => {
 exports.getMe = async (req, res) => {
     try {
         const user = await User.findById(req.user._id).select('-password');
+        res.json(user);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+};
+
+exports.updateMe = async (req, res) => {
+    try {
+        const { settings, ...otherFields } = req.body;
+        const user = await User.findById(req.user._id);
+        
+        if (!user) {
+            return res.status(404).json({ message: "User not found" });
+        }
+
+        // Handle settings update manually to support partial nested updates
+        if (settings) {
+            if (!user.settings) user.settings = {};
+            if (settings.mfaEnabled !== undefined) {
+                user.settings.mfaEnabled = settings.mfaEnabled;
+            }
+        }
+        
+        await user.save();
+        
         res.json(user);
     } catch (err) {
         res.status(500).json({ error: err.message });
