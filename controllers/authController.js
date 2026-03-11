@@ -63,7 +63,9 @@ exports.login = async (req, res) => {
         const isMatch = await bcrypt.compare(password, user.password);
         if (!isMatch) return res.status(400).json({ message: "Invalid credentials" });
 
-        if (user.settings && user.settings.mfaEnabled) {
+        const isMfaEnabled = user.settings?.mfaEnabled ?? true;
+        
+        if (isMfaEnabled) {
             // Generate 6-digit OTP
             const otp = Math.floor(100000 + Math.random() * 900000).toString();
             const salt = await bcrypt.genSalt(10);
